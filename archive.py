@@ -29,6 +29,15 @@ def get_raw_issue_comments(issue):
     return [comment.raw_data for comment in issue.get_comments()]
 
 
+def get_raw_pull_review_comments(issue):
+    if not issue.pull_request:
+        return []
+
+    pull = issue.as_pull_request()
+
+    return [x.raw_data for x in pull.get_comments()]
+
+
 def get_repo_name(issue):
     repo_url = issue.raw_data["repository_url"]
     _, _, name = repo_url.rpartition("https://api.github.com/repos/")
@@ -66,13 +75,22 @@ def with_retries(func):
 def archive_issue(issue):
     issue_directory = get_issue_output_path(issue)
     issue_data = to_json(issue.raw_data)
+
     comments = get_raw_issue_comments(issue)
     comments = exclude_user_comments(comments, IGNORE_USERS)
     comments_data = to_json(comments)
 
-    # Don't download issues created by ignored users if they don't also have
+    review_comments = get_raw_pull_review_comments(issue)
+    review_comments = exclude_user_comments(review_comments, IGNORE_USERS)
+    review_comments_data = to_json(review_comments)
+
+    # Don't archive issues created by ignored users if they don't also have
     # not-ignored comments.
-    if issue.user.login in IGNORE_USERS and not comments:
+    if (
+        issue.user.login in IGNORE_USERS
+        and not comments
+        and not review_comments
+    ):
         return
 
     Path.mkdir(issue_directory, parents=True, exist_ok=True)
@@ -83,6 +101,10 @@ def archive_issue(issue):
     if comments:
         with open(issue_directory / "comments.json", "w") as fp:
             fp.write(comments_data)
+
+    if review_comments:
+        with open(issue_directory / "review_comments.json", "w") as fp:
+            fp.write(review_comments_data)
 
 
 def get_user_issues(user, org, start_date=None):

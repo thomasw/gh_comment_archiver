@@ -17,17 +17,21 @@ output/
       issue1/
         issue.json
         comments.json
+        review_comments.json
       ...
       issueN/
         issue.json
         comments.json
+        review_comments.json
     ...
     repoM
       issue1/
         issue.json
         comments.json
+        review_comments.json
       ...
       issueP/
         issue.json
         comments.json
+        review_comments.json
 ```
