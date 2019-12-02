@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # type: ignore
-from datetime import timedelta
+from datetime import datetime, timedelta
+import functools
 from json import dumps
 from pathlib import Path
 import sys
@@ -14,6 +15,7 @@ ORG = "org_name"
 USER = "username"
 IGNORE_USERS = ["a_list_of_users", "that_you", "want_to_ignore"]
 OUTPUT = Path("./output")
+START_DATE = None
 # End Configuration
 
 GH = Github(OAUTH_TOKEN)
@@ -43,6 +45,24 @@ def to_json(data):
     return dumps(data, sort_keys=True, indent=4)
 
 
+def with_retries(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        while True:
+            try:
+                return func(*args, **kwargs)
+                break
+            except RateLimitExceededException:
+                print(
+                    f"\n[{datetime.now()}] Rate limit error. "
+                    "Sleeping for 15 minutes."
+                )
+                sleep(timedelta(minutes=15).seconds)
+
+    return wrapper
+
+
+@with_retries
 def archive_issue(issue):
     issue_directory = get_issue_output_path(issue)
     issue_data = to_json(issue.raw_data)
@@ -65,54 +85,49 @@ def archive_issue(issue):
             fp.write(comments_data)
 
 
-issues = GH.search_issues(
-    "", sort="created", order="asc", involves=USER, org=ORG
-)
+def get_user_issues(user, org, start_date=None):
+    query = {"sort": "created", "order": "asc", "involves": USER, "org": ORG}
+
+    if start_date:
+        query["created"] = f">{start_date.isoformat()}"
+
+    return GH.search_issues("", **query)
+
+
+issues = get_user_issues(USER, ORG, start_date=START_DATE)
 downloaded_count = 0
 oldest = issues[0] if issues else None
 latest = None
 
-# totalCount is sometimes an incorrect value unless one of the element is
-# accessed prior to using the totalCount value.
+# totalCount is sometimes an incorrect value unless an element is accessed
+# prior to accessing the totalCount value.
 print(f"Downloading {issues.totalCount} issues.")
 
 # Either the Github API or pygithub is preventing retrieving more than ~1020
-# results per search result. To work around this, we track the last issue
-# downloaded and we search again using the created date for that issue as
-# our new start date. This process is repeated until there are no more search
+# results per search query. To work around this, we track the last issue
+# downloaded and we search again using the created date for that issue as the
+# new start date. This process is repeated until there are no more search
 # results.
 while issues.totalCount > 0:
-    oldest = issues[0] if not oldest else oldest
-    latest = None
-
     for issue in issues:
-        try:
-            archive_issue(issue)
-        except RateLimitExceededException:
-            print("\nRate limit error. Sleeping for 1 hour.")
-            sleep(timedelta(hours=0.5).seconds)
-            archive_issue(issue)
+        archive_issue(issue)
 
+        latest = issue
         downloaded_count += 1
 
         sys.stdout.write(f"\r{downloaded_count} downloaded.")
         sys.stdout.flush()
-        latest = issue
 
-    print(f"\nSearch results exhausted. Continuing from {latest.created_at}.")
+    print()  # Adds a line break after the "downloaded" output.
+    print(f"Issues created before {latest.created_at.isoformat()} downloaded.")
 
-    issues = GH.search_issues(
-        "",
-        sort="created",
-        order="asc",
-        involves=USER,
-        org=ORG,
-        created=f">={latest.created_at.strftime('%Y-%m-%d')}",
-    )
+    issues = get_user_issues(USER, ORG, start_date=latest.created_at)
+
+    print(f"Issues remaining: {issues.totalCount}")
 
 if oldest and latest:
     print(
-        f"Download complete: {downloaded_count} downloaded from "
+        f"\nDownload complete: {downloaded_count} downloaded from "
         f"{oldest.created_at} to {latest.created_at}."
     )
 else:
